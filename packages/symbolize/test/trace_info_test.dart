@@ -27,4 +27,23 @@ void main() {
     expect(merged.arch, 'arm64');
     expect(merged.buildId, isNotNull);
   });
+
+  group('splitTraces', () {
+    test('single trace stays whole', () {
+      expect(splitTraces(trace), [trace]);
+    });
+
+    test('banner-less input returns as one segment', () {
+      expect(splitTraces('just a note\n#0 something\n'), hasLength(1));
+    });
+
+    test('splits banner-separated traces and keeps the prologue with the first', () {
+      final two = '${trace}extra noise\n${File('test/fixtures/trace2.txt').readAsStringSync()}';
+      final parts = splitTraces(two);
+      expect(parts, hasLength(2));
+      expect(parts[0], contains('extra noise'));
+      expect(parts[0], contains('b4485c2ed97b61f597e466d02a0568ce'));
+      expect(parts[1], contains('b4485c2eb346a69097e466d0b6070d2c'));
+    });
+  });
 }

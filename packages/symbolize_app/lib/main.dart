@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mcp_toolkit/mcp_toolkit.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:symbolize/symbolize.dart';
 
 void main() {
@@ -21,6 +22,14 @@ void main() {
 
 class SymbolizeApp extends StatelessWidget {
   const SymbolizeApp({super.key});
+
+  /// How decoding is dispatched — a worker isolate in production
+  /// (DWARF parsing is CPU-heavy). Tests replace this with
+  /// [decodeTraceReport] to run inline, since a real isolate's future
+  /// can't be awaited inside the fake-async test zone.
+  @visibleForTesting
+  static Future<Map<String, Object?>> Function(Map<String, Object?>) decodeRunner =
+      (args) => compute(decodeTraceReport, args);
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -40,6 +49,41 @@ class SymbolizeHome extends StatefulWidget {
 }
 
 enum _SourceMode { archive, file }
+
+/// The decode work unit — produces a report of only sendable data
+/// (`SymbolsFile` holds a parsed [Dwarf] after decoding, which can't cross
+/// an isolate boundary, so the report is plain maps/lists/strings). Safe to
+/// run inside `compute`; tests run it inline via [SymbolizeApp.decodeRunner].
+Future<Map<String, Object?>> decodeTraceReport(Map<String, Object?> args) async {
+  try {
+    final results = await symbolizeAll(
+      args['trace'] as String,
+      symbols: args['symbolsFile'] == null ? null : SymbolsFile(args['symbolsFile'] as String),
+      symbolsDir: Directory(args['symbolsDir'] as String),
+      version: args['version'] as String?,
+      includeInternalFrames: args['internalFrames'] as bool,
+    );
+    return {
+      'traces': [
+        for (final r in results)
+          {
+            'warnings': r.warnings,
+            'decodings': [
+              for (final d in r.decodings)
+                {
+                  'name': d.symbols.name,
+                  'output': d.output,
+                  'resolved': d.resolved,
+                  'namesRestored': d.namesRestored,
+                },
+            ],
+          },
+      ],
+    };
+  } on StateError catch (e) {
+    return {'error': e.message};
+  }
+}
 
 class _SymbolizeHomeState extends State<SymbolizeHome> {
   final _trace = TextEditingController();
@@ -61,7 +105,25 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
     final guess = findProjectRoot();
     final symbols = SymbolArchive.at(guess).symbolsDir.path;
     _symbolsDir.text = symbols;
-    _reloadVersions();
+    _restore().whenComplete(_reloadVersions);
+  }
+
+  Future<void> _restore() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _symbolsDir.text = prefs.getString('symbolsDir') ?? _symbolsDir.text;
+      _explicitFile.text = prefs.getString('symbolsFile') ?? '';
+      _internalFrames = prefs.getBool('internalFrames') ?? _internalFrames;
+      _mode = _SourceMode.values[prefs.getInt('mode') ?? _mode.index];
+    });
+  }
+
+  Future<void> _persist() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('symbolsDir', _symbolsDir.text);
+    await prefs.setString('symbolsFile', _explicitFile.text);
+    await prefs.setBool('internalFrames', _internalFrames);
+    await prefs.setInt('mode', _mode.index);
   }
 
   @override
@@ -84,6 +146,7 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
     final dir = await FilePicker.getDirectoryPath(dialogTitle: 'Choose symbols directory');
     if (dir == null) return;
     _symbolsDir.text = dir;
+    _persist();
     _reloadVersions();
   }
 
@@ -94,7 +157,10 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
       allowedExtensions: ['symbols'],
     );
     final path = res?.files.single.path;
-    if (path != null) _explicitFile.text = path;
+    if (path != null) {
+      _explicitFile.text = path;
+      _persist();
+    }
   }
 
   Future<void> _decode() async {
@@ -108,28 +174,48 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
       _status = 'Decoding…';
       _output = '';
     });
+    _persist();
+    // DWARF parsing + decoding can take a while on large symbols files —
+    // keep it off the UI isolate. The closure may only capture sendable
+    // values, so the inputs are copied into a plain map first.
+    final args = <String, Object?>{
+      'trace': trace,
+      'symbolsFile': _mode == _SourceMode.file ? _explicitFile.text : null,
+      'symbolsDir': _symbolsDir.text,
+      'version': _version,
+      'internalFrames': _internalFrames,
+    };
+    final report = await SymbolizeApp.decodeRunner(args);
     try {
-      final result = await symbolize(
-        trace,
-        symbols: _mode == _SourceMode.file ? SymbolsFile(_explicitFile.text) : null,
-        symbolsDir: Directory(_symbolsDir.text),
-        version: _version,
-        includeInternalFrames: _internalFrames,
-      );
+      final error = report['error'];
+      if (error is String) {
+        setState(() => _status = error);
+        return;
+      }
+      final traces = report['traces'] as List;
       final buffer = StringBuffer();
-      for (final d in result.decodings) {
-        if (result.decodings.length > 1) buffer.writeln('===== ${d.symbols.name} =====\n');
-        buffer.write(d.output.endsWith('\n') ? d.output : '${d.output}\n');
+      final status = <String>[];
+      for (var i = 0; i < traces.length; i++) {
+        final result = traces[i] as Map;
+        for (final w in result['warnings'] as List) {
+          status.add('warning: $w');
+        }
+        if (traces.length > 1) buffer.writeln('===== trace ${i + 1}/${traces.length} =====\n');
+        for (final d in result['decodings'] as List) {
+          final decoding = d as Map;
+          final name = decoding['name'] as String;
+          final output = decoding['output'] as String;
+          if ((result['decodings'] as List).length > 1) buffer.writeln('===== $name =====\n');
+          buffer.write(output.endsWith('\n') ? output : '$output\n');
+          final restored = decoding['namesRestored'] as int;
+          status.add('$name — ${decoding['resolved'] == true ? 'resolved' : 'no frames resolved (wrong build?)'}'
+              '${restored > 0 ? ', $restored names via .map.json' : ''}');
+        }
       }
       setState(() {
         _output = buffer.toString();
-        _status = [
-          for (final d in result.decodings)
-            '${d.symbols.name} — ${d.resolved ? 'resolved' : 'no frames resolved (wrong build?)'}',
-        ].join('\n');
+        _status = status.join('\n');
       });
-    } on StateError catch (e) {
-      setState(() => _status = e.message);
     } finally {
       setState(() => _busy = false);
     }
@@ -160,7 +246,10 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
                 ButtonSegment(value: _SourceMode.file, label: Text('.symbols file'), icon: Icon(Icons.insert_drive_file_outlined)),
               ],
               selected: {_mode},
-              onSelectionChanged: (s) => setState(() => _mode = s.first),
+              onSelectionChanged: (s) => setState(() {
+                _mode = s.first;
+                _persist();
+              }),
             ),
             const SizedBox(height: 12),
             if (_mode == _SourceMode.archive)

@@ -17,6 +17,7 @@
 library;
 
 export 'src/archive.dart';
+export 'src/obfuscation_map.dart';
 export 'src/project.dart';
 export 'src/resolver.dart';
 export 'src/symbols_file.dart';

@@ -38,6 +38,7 @@ dependencies:
   # Dev-only: registers the MCP service extension in debug builds so fmtk /
   # the flutter-mcp-toolkit server can inspect and drive the app.
   mcp_toolkit: ^7.0.0
+  shared_preferences: ^2.5.6
 
 dev_dependencies:
   flutter_test:

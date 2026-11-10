@@ -48,3 +48,34 @@ class TraceInfo {
   static final _header = RegExp(r'^os:\s*(\S+)\s+arch:\s*(\S+)', multiLine: true);
   static final _buildId = RegExp(r"^build_id:\s*'([0-9a-fA-F]+)'", multiLine: true);
 }
+
+/// Splits [input] into individual stack traces.
+///
+/// Crash exports (Crashlytics `issue.txt`, logcat dumps) often contain
+/// several traces, each starting with the VM's `*** *** ***` banner line.
+/// Text before the first banner belongs to the first trace (file headers,
+/// breadcrumbs); a banner-less input is returned as a single element.
+List<String> splitTraces(String input) {
+  final segments = <List<String>>[];
+  var current = <String>[];
+  var currentHasBanner = false;
+  for (final line in input.split('\n')) {
+    // A banner starts a new segment only when the buffer already holds one —
+    // text before the first banner belongs to the first trace.
+    if (_banner.hasMatch(line)) {
+      if (currentHasBanner) {
+        segments.add(current);
+        current = [];
+      }
+      currentHasBanner = true;
+    }
+    current.add(line);
+  }
+  segments.add(current);
+  return [
+    for (final s in segments)
+      if (s.join('\n').trim().isNotEmpty) s.join('\n'),
+  ];
+}
+
+final _banner = RegExp(r'^\*{2,}\s+\*{2,}(\s+\*{2,})*\s*$');

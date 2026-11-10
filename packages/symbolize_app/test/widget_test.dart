@@ -2,9 +2,16 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:symbolize_app/main.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    // Real isolates can't be awaited inside the fake-async test zone.
+    SymbolizeApp.decodeRunner = decodeTraceReport;
+  });
+
   testWidgets('decodes a pasted trace with an explicit symbols file', (tester) async {
     await tester.pumpWidget(const SymbolizeApp());
     await tester.pumpAndSettle();

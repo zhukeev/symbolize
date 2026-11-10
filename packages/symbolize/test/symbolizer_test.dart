@@ -55,4 +55,65 @@ void main() {
       throwsStateError,
     );
   });
+
+  group('build id matching', () {
+    test('explicit file matching the trace reports no warning', () async {
+      final result = await symbolize(trace, symbols: symbols);
+      expect(result.decodings.single.buildIdMatches, isTrue);
+      expect(result.warnings, isEmpty);
+    });
+
+    test('explicit wrong-build file produces a build id warning', () async {
+      final result = await symbolize(trace, symbols: wrong);
+      expect(result.decodings.single.buildIdMatches, isFalse);
+      expect(result.warnings.single, contains('does not match'));
+      expect(result.warnings.single, contains('b4485c2ed97b61f597e466d02a0568ce'));
+    });
+  });
+
+  group('symbolizeAll', () {
+    test('decodes each banner-separated trace against its own build', () async {
+      final trace2 = File('test/fixtures/trace2.txt').readAsStringSync();
+      // Both .symbols files in the pool; each trace's build_id selects its
+      // own file — trace -> app.macos, trace2 -> app2.macos.
+      final results = await symbolizeAll(
+        '$trace\n$trace2',
+        buildSymbolsDir: Directory('test/fixtures'),
+      );
+      expect(results, hasLength(2));
+      expect(results[0].decodings.single.symbols.name, 'app.macos.symbols');
+      expect(results[0].decodings.single.output, contains('secondLevel'));
+      expect(results[1].decodings.single.symbols.name, 'app2.macos.symbols');
+      expect(results[1].decodings.single.output, contains('outerCall'));
+      for (final r in results) {
+        expect(r.warnings, isEmpty);
+        expect(r.decodings.single.buildIdMatches, isTrue);
+      }
+    });
+  });
+
+  group('.map.json pass', () {
+    const nameTrace = '''
+#0      YE (uN:10)
+#1      ZE (uN:6)
+''';
+
+    test('sibling map restores obfuscated names', () async {
+      // app.macos.map.json sits next to app.macos.symbols in fixtures/.
+      final result = await symbolize(nameTrace, symbols: symbols);
+      final d = result.decodings.single;
+      expect(d.namesRestored, greaterThan(0));
+      expect(d.output, contains('thirdLevel (file:///private/tmp/symfix/crash.dart:10)'));
+      expect(d.output, contains('secondLevel'));
+    });
+
+    test('explicit obfuscationMap is used when given', () async {
+      final result = await symbolize(
+        nameTrace,
+        symbols: symbols,
+        obfuscationMap: ObfuscationMap.fromFile('test/fixtures/app.macos.map.json'),
+      );
+      expect(result.decodings.single.output, contains('thirdLevel'));
+    });
+  });
 }

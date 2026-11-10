@@ -48,8 +48,32 @@ symbolize list                        # show archived versions + build ids
 Symbols are resolved in order: `--symbols` file → `symbols/<version>/` →
 `build/symbols/` (with a warning, since it may be a different build).
 
-A symbols file that doesn't match the build leaves the trace unchanged —
-the CLI warns `no frames resolved` in that case instead of printing garbage.
+Safety: a symbols file whose DWARF build id contradicts the trace's
+`build_id` produces a `does not match` warning — decoding with the wrong
+build emits plausible *wrong* names, not an error.
+
+### Multi-trace input
+
+Crash exports often contain several `*** ***`-separated dumps. Paste or
+pipe the whole file — each trace is decoded against the build its own
+`build_id` selects:
+
+```text
+── trace 1/2 ──      → build_id A's symbols
+── trace 2/2 ──      → build_id B's symbols
+```
+
+### Name-level traces (`.map.json`)
+
+`--obfuscate` without `--dwarf-stack-traces` produces frames like
+`#0  YE (uN:10)` — no hex PCs, just scrambled identifiers. The sibling
+`.map.json` (archived alongside `.symbols`, or passed with `-m`) restores
+them:
+
+```sh
+symbolize decode -i crash.txt -d app.android-arm64.symbols
+# app.android-arm64.symbols: restored 312 obfuscated names via .map.json
+```
 
 ### Wire archiving into a Makefile
 

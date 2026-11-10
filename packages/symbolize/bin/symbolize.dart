@@ -73,6 +73,7 @@ ArgParser _projectOpts(ArgParser p) => p
 ArgParser _decodeOpts() => _projectOpts(ArgParser())
   ..addOption('input', abbr: 'i', help: 'Stack trace file (default: stdin).')
   ..addOption('symbols', abbr: 'd', help: 'Explicit .symbols file — bypasses archive lookup.')
+  ..addOption('map', abbr: 'm', help: 'Explicit .map.json obfuscation map (default: sibling of the .symbols file).')
   ..addOption('version', abbr: 'v', help: 'App version to decode against (default: pubspec.yaml version).')
   ..addOption('os', help: 'Override os: from the trace header.')
   ..addOption('arch', help: 'Override arch: from the trace header.')
@@ -106,6 +107,9 @@ Future<void> _decode(ArgResults a) async {
     if (explicit.dwarf == null) throw StateError('${explicit.path} is not a valid .symbols file');
   }
 
+  ObfuscationMap? map;
+  if (_opt(a, 'map') != null) map = ObfuscationMap.fromFile(_opt(a, 'map')!);
+
   final symbolsDir = Directory(_opt(a, 'symbols-dir') ?? p.join(project.path, 'symbols'));
   final buildDir = Directory(_opt(a, 'build-dir') ?? p.join(project.path, 'build', 'symbols'));
 
@@ -121,12 +125,13 @@ Future<void> _decode(ArgResults a) async {
     stderr.writeln('warning: no archive for $version — falling back to ${buildDir.path} (may be a different build)');
   }
 
-  final result = await symbolize(
+  final results = await symbolizeAll(
     trace,
     symbols: explicit,
     symbolsDir: symbolsDir,
     version: version,
     buildSymbolsDir: buildDir,
+    obfuscationMap: map,
     os: _opt(a, 'os'),
     arch: _opt(a, 'arch'),
     includeInternalFrames: _flag(a, 'internal-frames', or: true),
@@ -140,18 +145,33 @@ Future<void> _decode(ArgResults a) async {
 
   final outPath = _opt(a, 'output');
   final buffer = StringBuffer();
-  for (final d in result.decodings) {
-    if (result.decodings.length > 1) {
-      stderr.writeln('── ${d.symbols.name} ──');
-      buffer.writeln('===== ${d.symbols.name} =====');
+  var anyUnresolved = false;
+  for (var i = 0; i < results.length; i++) {
+    final result = results[i];
+    if (results.length > 1) {
+      stderr.writeln('── trace ${i + 1}/${results.length} ──');
+      buffer.writeln('===== trace ${i + 1}/${results.length} =====');
     }
-    if (outPath == null) {
-      stdout.write(d.output.endsWith('\n') ? d.output : '${d.output}\n');
-    } else {
-      buffer.write(d.output.endsWith('\n') ? d.output : '${d.output}\n');
+    for (final w in result.warnings) {
+      stderr.writeln('warning: $w');
     }
+    for (final d in result.decodings) {
+      if (result.decodings.length > 1) {
+        stderr.writeln('── ${d.symbols.name} ──');
+        buffer.writeln('===== ${d.symbols.name} =====');
+      }
+      if (d.namesRestored > 0) {
+        stderr.writeln('${d.symbols.name}: restored ${d.namesRestored} obfuscated names via .map.json');
+      }
+      if (outPath == null) {
+        stdout.write(d.output.endsWith('\n') ? d.output : '${d.output}\n');
+      } else {
+        buffer.write(d.output.endsWith('\n') ? d.output : '${d.output}\n');
+      }
+    }
+    if (result.resolved.isEmpty) anyUnresolved = true;
   }
-  if (result.resolved.isEmpty) {
+  if (anyUnresolved) {
     stderr.writeln('warning: no frames resolved — the symbols file likely does not match this build');
   }
   if (outPath != null) {
