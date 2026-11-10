@@ -426,8 +426,13 @@ Future<void> _fetch(ArgResults a) async {
 
 /// Reads an option only when it was defined for this parser level — the
 /// bare-stdin decode path runs with top-level results that lack the decode
-/// command's options.
-String? _opt(ArgResults a, String name) => a.options.contains(name) ? a[name] as String? : null;
+/// command's options. Also guards against same-named bool flags (top-level
+/// `--version` vs decode's `--version <ver>`).
+String? _opt(ArgResults a, String name) {
+  if (!a.options.contains(name)) return null;
+  final v = a[name];
+  return v is String ? v : null;
+}
 
 bool _flag(ArgResults a, String name, {bool or = false}) => a.options.contains(name) ? a[name] as bool : or;
 

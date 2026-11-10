@@ -1,3 +1,9 @@
+## 0.1.1
+
+- Fix `pbpaste | symbolize` crash: the bare-stdin path hit
+  `bool is not a subtype of String?` because top-level `--version` is a
+  flag while decode's `--version <ver>` is an option sharing the name.
+
 ## 0.1.0
 
 - Initial release.
