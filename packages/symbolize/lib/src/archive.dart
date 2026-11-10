@@ -54,6 +54,38 @@ class SymbolArchive {
     return [for (final d in dirs) ArchivedVersion(d)];
   }
 
+  /// Every `build_id` known in the archive → the version storing it.
+  ///
+  /// Read from `manifest.json` where present (instant); version dirs
+  /// without a manifest have their `.symbols` files parsed for the DWARF
+  /// build id (~10–60ms each). A crash trace's `build_id` header therefore
+  /// identifies its version without the user picking one.
+  Future<Map<String, String>> buildIdIndex() async {
+    final index = <String, String>{};
+    for (final v in versions()) {
+      final manifest = v.manifest;
+      final files = manifest?['files'];
+      if (files is List) {
+        for (final f in files) {
+          final id = (f as Map)['buildId'];
+          if (id is String) index[id] = v.version;
+        }
+      } else {
+        for (final file in v.files) {
+          final id = file.buildId;
+          if (id != null) index[id] = v.version;
+        }
+      }
+    }
+    return index;
+  }
+
+  /// The archived version whose symbols match [buildId], or null.
+  Future<ArchivedVersion?> findByBuildId(String buildId) async {
+    final version = (await buildIdIndex())[buildId];
+    return version == null ? null : ArchivedVersion(versionDir(version));
+  }
+
   /// Copies `*.symbols` and `*.map.json` from [from] into
   /// `<symbolsDir>/<version>/` and writes `manifest.json`.
   ///
@@ -94,6 +126,30 @@ class SymbolArchive {
         .writeAsStringSync('${const JsonEncoder.withIndent('  ').convert(manifest)}\n');
     return ArchivedVersion(dest);
   }
+}
+
+/// Finds `*.symbols` files under [root], up to [maxDepth] directories deep
+/// and [maxFiles] total — bounded so pointing it at a home directory or
+/// `~/Downloads` stays fast. Hidden directories (`.git`, `.dart_tool`) are
+/// skipped. Sibling `*.map.json` files pair automatically via
+/// [SymbolsFile.obfuscationMap].
+List<SymbolsFile> scanForSymbols(Directory root, {int maxDepth = 4, int maxFiles = 64}) {
+  final found = <SymbolsFile>[];
+  void walk(Directory dir, int depth) {
+    if (found.length >= maxFiles || !dir.existsSync()) return;
+    for (final entity in dir.listSync(followLinks: false)) {
+      if (found.length >= maxFiles) return;
+      final name = p.basename(entity.path);
+      if (name.startsWith('.')) continue;
+      if (entity is File && name.endsWith('.symbols')) {
+        found.add(SymbolsFile(entity.path));
+      } else if (entity is Directory && depth < maxDepth) {
+        walk(entity, depth + 1);
+      }
+    }
+  }
+  walk(root.absolute, 0);
+  return found;
 }
 
 /// One `<symbolsDir>/<version>/` directory.

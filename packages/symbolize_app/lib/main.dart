@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mcp_toolkit/mcp_toolkit.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:symbolize/symbolize.dart';
 
@@ -30,6 +33,12 @@ class SymbolizeApp extends StatelessWidget {
   @visibleForTesting
   static Future<Map<String, Object?>> Function(Map<String, Object?>) decodeRunner =
       (args) => compute(decodeTraceReport, args);
+
+  /// How the archive's buildId index is scanned — a worker isolate in
+  /// production for the same reason as [decodeRunner].
+  @visibleForTesting
+  static Future<Map<String, String>> Function(String) indexRunner =
+      (dir) => compute(indexArchive, dir);
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -74,6 +83,7 @@ Future<Map<String, Object?>> decodeTraceReport(Map<String, Object?> args) async 
                   'name': d.symbols.name,
                   'output': d.output,
                   'resolved': d.resolved,
+                  'buildIdMatches': d.buildIdMatches,
                   'namesRestored': d.namesRestored,
                 },
             ],
@@ -85,6 +95,11 @@ Future<Map<String, Object?>> decodeTraceReport(Map<String, Object?> args) async 
   }
 }
 
+/// Maps every DWARF `build_id` archived under [dir] to its version —
+/// runs in a worker isolate via [SymbolizeApp.indexRunner].
+Future<Map<String, String>> indexArchive(String dir) =>
+    SymbolArchive(Directory(dir)).buildIdIndex();
+
 class _SymbolizeHomeState extends State<SymbolizeHome> {
   final _trace = TextEditingController();
   final _symbolsDir = TextEditingController();
@@ -94,8 +109,21 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
   String? _version;
   bool _internalFrames = true;
   bool _busy = false;
+  bool _dragging = false;
   String _status = '';
   String _output = '';
+
+  /// build_id → archived version, rebuilt whenever the symbols dir
+  /// changes. Lets a pasted trace resolve its own version — the user
+  /// never has to pick one.
+  Map<String, String> _buildIdIndex = {};
+
+  /// Debounce for paste-detection auto-decode.
+  Timer? _autoDecode;
+
+  /// The trace text last decoded — re-pasting the same trace doesn't
+  /// re-trigger the auto-decode loop.
+  String _lastDecodedTrace = '';
 
   @override
   void initState() {
@@ -106,6 +134,15 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
     final symbols = SymbolArchive.at(guess).symbolsDir.path;
     _symbolsDir.text = symbols;
     _restore().whenComplete(_reloadVersions);
+    // Paste a trace → decode it without touching anything else.
+    _trace.addListener(() {
+      _autoDecode?.cancel();
+      final text = _trace.text;
+      if (!detectTrace(text) || text == _lastDecodedTrace) return;
+      _autoDecode = Timer(const Duration(milliseconds: 400), () {
+        if (!_busy && _trace.text != _lastDecodedTrace) _decode();
+      });
+    });
   }
 
   Future<void> _restore() async {
@@ -128,6 +165,7 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
 
   @override
   void dispose() {
+    _autoDecode?.cancel();
     _trace.dispose();
     _symbolsDir.dispose();
     _explicitFile.dispose();
@@ -140,6 +178,14 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
       if (_version != null && !_versions.any((v) => v.version == _version)) _version = null;
       _version ??= _versions.isEmpty ? null : _versions.last.version;
     });
+    _rescanIndex();
+  }
+
+  /// Rebuild the build_id → version index off the UI isolate.
+  Future<void> _rescanIndex() async {
+    final dir = _symbolsDir.text;
+    final index = await SymbolizeApp.indexRunner(dir);
+    if (mounted && dir == _symbolsDir.text) setState(() => _buildIdIndex = index);
   }
 
   Future<void> _pickDir() async {
@@ -164,16 +210,35 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
   }
 
   Future<void> _decode() async {
-    final trace = _trace.text;
+    var trace = _trace.text;
     if (trace.trim().isEmpty) {
-      setState(() => _status = 'Paste an obfuscated stack trace first.');
-      return;
+      // One tap, zero typing: empty field means "use the clipboard".
+      trace = (await Clipboard.getData('text/plain'))?.text ?? '';
+      if (!detectTrace(trace)) {
+        setState(() => _status = 'Copy a crash trace or paste it here — '
+            'clipboard doesn\'t look like one.');
+        return;
+      }
+      _trace.text = trace;
+    }
+    // Version resolution: the trace's own build_id beats the dropdown —
+    // an archived build needs zero selection from the user.
+    var version = _version;
+    String? autoNote;
+    final buildId = TraceInfo.parse(trace).buildId;
+    if (_mode == _SourceMode.archive && buildId != null) {
+      final hit = _buildIdIndex[buildId];
+      if (hit != null) {
+        if (hit != version) autoNote = 'auto-matched $hit by build_id';
+        version = hit;
+      }
     }
     setState(() {
       _busy = true;
       _status = 'Decoding…';
       _output = '';
     });
+    _lastDecodedTrace = trace;
     _persist();
     // DWARF parsing + decoding can take a while on large symbols files —
     // keep it off the UI isolate. The closure may only capture sendable
@@ -182,7 +247,7 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
       'trace': trace,
       'symbolsFile': _mode == _SourceMode.file ? _explicitFile.text : null,
       'symbolsDir': _symbolsDir.text,
-      'version': _version,
+      'version': version,
       'internalFrames': _internalFrames,
     };
     final report = await SymbolizeApp.decodeRunner(args);
@@ -194,7 +259,7 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
       }
       final traces = report['traces'] as List;
       final buffer = StringBuffer();
-      final status = <String>[];
+      final status = <String>[?autoNote];
       for (var i = 0; i < traces.length; i++) {
         final result = traces[i] as Map;
         for (final w in result['warnings'] as List) {
@@ -208,8 +273,9 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
           if ((result['decodings'] as List).length > 1) buffer.writeln('===== $name =====\n');
           buffer.write(output.endsWith('\n') ? output : '$output\n');
           final restored = decoding['namesRestored'] as int;
+          final idOk = decoding['buildIdMatches'] == true ? ', build_id ✓' : '';
           status.add('$name — ${decoding['resolved'] == true ? 'resolved' : 'no frames resolved (wrong build?)'}'
-              '${restored > 0 ? ', $restored names via .map.json' : ''}');
+              '$idOk${restored > 0 ? ', $restored names via .map.json' : ''}');
         }
       }
       setState(() {
@@ -226,16 +292,79 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
     if (path != null) await File(path).writeAsString(_output);
   }
 
+  /// Dropped `.symbols` → explicit-file decode; dropped directory →
+  /// archive root; dropped text → pasted and auto-decoded by the
+  /// controller listener.
+  Future<void> _handleDrop(List<DropItem> files) async {
+    setState(() => _dragging = false);
+    for (final f in files) {
+      final file = File(f.path);
+      if (Directory(f.path).existsSync()) {
+        _symbolsDir.text = f.path;
+        setState(() => _mode = _SourceMode.archive);
+        _persist();
+        _reloadVersions();
+        continue;
+      }
+      if (f.path.endsWith('.symbols')) {
+        _explicitFile.text = f.path;
+        setState(() => _mode = _SourceMode.file);
+        _persist();
+        if (detectTrace(_trace.text)) unawaited(_decode());
+        continue;
+      }
+      final text = await file.readAsString();
+      if (detectTrace(text)) {
+        _trace.text = text; // listener auto-decodes
+      } else {
+        setState(() => _status = '${p.basename(f.path)} — not a stack trace, ignored.');
+      }
+    }
+  }
+
+  /// One tap: copy the project's `build/symbols` output into the archive
+  /// under the pubspec version, then re-index so the next crash from that
+  /// version resolves instantly.
+  Future<void> _importBuildSymbols() async {
+    // The archive's parent is the project root (conventional layout);
+    // fall back to cwd detection.
+    final dir = Directory(_symbolsDir.text);
+    final root = p.basename(dir.path) == 'symbols' ? dir.parent : findProjectRoot();
+    final version = pubspecVersion(root);
+    final from = Directory(p.join(root.path, 'build', 'symbols'));
+    if (version == null) {
+      setState(() => _status = 'no version in ${root.path}/pubspec.yaml');
+      return;
+    }
+    try {
+      final v = SymbolArchive(dir).store(version: version, from: from, meta: {'importedAt': DateTime.now().toUtc().toIso8601String()});
+      _reloadVersions();
+      setState(() {
+        _version = v.version;
+        _status = 'archived ${from.path} → symbols/$version (${v.files.length} files)';
+      });
+      _persist();
+    } on StateError catch (e) {
+      setState(() => _status = e.message);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final mono = TextStyle(fontFamily: 'Menlo', fontSize: 12, color: Theme.of(context).colorScheme.onSurface);
     return Scaffold(
       appBar: AppBar(title: const Text('Symbolize'), actions: [
+        IconButton(tooltip: 'Import build/symbols → archive', icon: const Icon(Icons.archive_outlined), onPressed: _importBuildSymbols),
         if (_output.isNotEmpty)
           IconButton(tooltip: 'Copy output', icon: const Icon(Icons.copy), onPressed: () => Clipboard.setData(ClipboardData(text: _output))),
         if (_output.isNotEmpty) IconButton(tooltip: 'Save output…', icon: const Icon(Icons.save), onPressed: _saveOutput),
       ]),
-      body: Padding(
+      body: DropTarget(
+        onDragDone: (d) => _handleDrop(d.files),
+        onDragEntered: (_) => setState(() => _dragging = true),
+        onDragExited: (_) => setState(() => _dragging = false),
+        child: Stack(children: [
+          Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -291,11 +420,18 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
                 maxLines: null,
                 textAlignVertical: TextAlignVertical.top,
                 style: mono,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Obfuscated stack trace',
                   alignLabelWithHint: true,
-                  hintText: 'Paste the Crashlytics/console trace here…',
-                  border: OutlineInputBorder(),
+                  hintText: 'Paste the Crashlytics/console trace here — or drop it on the window',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    tooltip: 'Paste from clipboard',
+                    icon: const Icon(Icons.paste_outlined, size: 18),
+                    onPressed: () async {
+                      _trace.text = (await Clipboard.getData('text/plain'))?.text ?? '';
+                    },
+                  ),
                 ),
               ),
             ),
@@ -325,6 +461,19 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
             ),
           ],
         ),
+          ),
+          if (_dragging)
+            IgnorePointer(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+                  border: Border.all(color: Theme.of(context).colorScheme.primary, width: 2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Center(child: Text('Drop a .symbols file, a trace file, or a symbols folder', style: TextStyle(fontSize: 16))),
+              ),
+            ),
+        ]),
       ),
     );
   }

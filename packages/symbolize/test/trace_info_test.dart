@@ -46,4 +46,20 @@ void main() {
       expect(parts[1], contains('b4485c2eb346a69097e466d0b6070d2c'));
     });
   });
+
+  group('detectTrace', () {
+    test('real VM dump detected', () {
+      expect(detectTrace(trace), isTrue);
+    });
+
+    test('name-level trace with build_id detected', () {
+      expect(detectTrace("build_id: 'abc123'\n#0      YE (uN:10)\n"), isTrue);
+    });
+
+    test('ordinary prose and partial frames rejected', () {
+      expect(detectTrace('hello world'), isFalse);
+      expect(detectTrace('#0 something without markers'), isFalse);
+      expect(detectTrace(''), isFalse);
+    });
+  });
 }

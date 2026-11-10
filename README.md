@@ -50,7 +50,23 @@ cd packages/symbolize_app
 flutter run -d macos
 ```
 
-Paste a trace, pick an archived version (or a `.symbols` file), decode.
+The app is built for zero-effort decoding:
+
+- **Paste → decoded.** Dropping a trace into the field (or pasting it)
+  decodes automatically — no button press needed.
+- **One tap, zero typing.** With an empty field, the Symbolize button reads
+  the clipboard directly.
+- **Version selects itself.** A `build_id` index across `symbols/*/`
+  resolves the archived version that produced the crash — the dropdown is
+  only a manual override.
+- **Drag anything in.** Drop a `.symbols` file, a `.txt` trace, or a
+  symbols folder straight onto the window.
+- **One-tap archive.** The app-bar import button copies `build/symbols`
+  into `symbols/<version>/` and re-indexes.
+
+`build_id` mismatches are surfaced as warnings instead of plausible-looking
+garbage, and sibling `.map.json` files restore obfuscated names in
+name-level traces.
 
 ![Symbolize macOS app](docs/app.png)
 

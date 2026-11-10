@@ -16,6 +16,8 @@
 - `symbolize list` — show archived versions and their files.
 - Library API: `symbolize()`, `symbolizeAll()`, `SymbolArchive`,
   `SymbolsFile`, `ObfuscationMap`, `selectSymbols`, `TraceInfo`,
-  `splitTraces`, `findProjectRoot`, `pubspecVersion`.
+  `splitTraces`, `detectTrace`, `scanForSymbols`,
+  `SymbolArchive.buildIdIndex`/`findByBuildId`, `findProjectRoot`,
+  `pubspecVersion`.
 - Pure Dart decode via `package:native_stack_traces` — no Flutter SDK needed
   at decode time.

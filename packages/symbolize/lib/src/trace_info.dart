@@ -79,3 +79,18 @@ List<String> splitTraces(String input) {
 }
 
 final _banner = RegExp(r'^\*{2,}\s+\*{2,}(\s+\*{2,})*\s*$');
+
+/// Heuristic: does [text] look like an obfuscated Dart stack trace?
+///
+/// True for `*** ***`-bannered VM dumps and name-level traces — anything
+/// with numbered stack frames plus either a VM banner, a `build_id` header
+/// or `_kDart…SnapshotInstructions` program counters. Used to auto-decode
+/// on paste; ordinary prose passes through untouched.
+bool detectTrace(String text) =>
+    RegExp(r'^\s*#\d+\s', multiLine: true).hasMatch(text) &&
+    (_banner.hasMatch(text) ||
+        text.contains('SnapshotInstructions+0x') ||
+        RegExp(r'^build_id:', multiLine: true).hasMatch(text) ||
+        // Any frame carrying a (location:line) — covers name-level traces
+        // like `#0 YE (uN:10)` that have no VM metadata at all.
+        RegExp(r'^\s*#\d+\s+\S+\s*\([^)]+:\d+\)', multiLine: true).hasMatch(text));

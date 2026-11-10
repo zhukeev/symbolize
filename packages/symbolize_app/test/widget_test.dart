@@ -10,6 +10,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     // Real isolates can't be awaited inside the fake-async test zone.
     SymbolizeApp.decodeRunner = decodeTraceReport;
+    SymbolizeApp.indexRunner = indexArchive;
   });
 
   testWidgets('decodes a pasted trace with an explicit symbols file', (tester) async {
