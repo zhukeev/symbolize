@@ -87,7 +87,7 @@ the buildId → os/arch narrowing; `TraceInfo.parse` reads the crash header.
 ## The desktop app
 
 A small Flutter desktop UI lives in
-[`packages/symbolize_app`](https://github.com/djukeevar/symbolize/tree/main/packages/symbolize_app)
+[`packages/symbolize_app`](https://github.com/zhukeev/symbolize/tree/main/packages/symbolize_app)
 — paste a trace, pick a version, decode.
 
 ## How symbols files work

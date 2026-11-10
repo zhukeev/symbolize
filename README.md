@@ -51,7 +51,8 @@ flutter run -d macos
 ```
 
 Paste a trace, pick an archived version (or a `.symbols` file), decode.
-<!-- TODO: screenshot -->
+
+![Symbolize macOS app](docs/app.png)
 
 ## Development
 

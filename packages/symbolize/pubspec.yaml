@@ -6,6 +6,12 @@ description: >-
   `flutter symbolize`.
 version: 0.1.0
 repository: https://github.com/zhukeev/symbolize
+topics:
+  - stack-trace
+  - obfuscation
+  - crash-reporting
+  - symbols
+  - dwarf
 
 environment:
   sdk: ^3.9.0
