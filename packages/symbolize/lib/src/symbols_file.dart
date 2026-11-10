@@ -22,6 +22,11 @@ class SymbolsFile {
   /// Basename, e.g. `app.android-arm64.symbols`.
   String get name => p.basename(path);
 
+  /// Windows builds emit `app.windows-x64.pdb` instead of `.symbols` —
+  /// CodeView format the DWARF decoder can't read. Detected early so the
+  /// user gets a clear message instead of a parse failure.
+  bool get isPdb => path.endsWith('.pdb');
+
   /// Parsed DWARF info, or null when [path] is missing or not a symbols file.
   Dwarf? get dwarf {
     if (!_loaded) {
@@ -67,6 +72,10 @@ class SymbolsFile {
   /// error. When [includeInternalFrames] is false, frames inside the VM and
   /// runtime internals are dropped from the output.
   Future<String> symbolize(String trace, {bool includeInternalFrames = true}) {
+    if (isPdb) {
+      throw StateError('$path is a Windows PDB (CodeView format) — the '
+          'decoder needs the ELF .symbols file from the same build');
+    }
     final d = dwarf;
     if (d == null) throw StateError('$path is not a valid .symbols file');
     return Stream.value(trace)

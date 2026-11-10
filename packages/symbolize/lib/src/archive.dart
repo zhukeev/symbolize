@@ -86,6 +86,25 @@ class SymbolArchive {
     return version == null ? null : ArchivedVersion(versionDir(version));
   }
 
+  /// Writes `<symbolsDir>/index.json` — the lookup table a
+  /// [RemoteSymbolStore] needs. Rsync this directory to any static host and
+  /// teammates can `symbolize fetch` a crash's build_id on demand.
+  Future<File> writeIndexFile() async {
+    final entries = <String, Object?>{};
+    for (final v in versions()) {
+      final manifest = v.manifest;
+      final files = manifest?['files'];
+      if (files is! List) continue;
+      final names = [for (final f in files) (f as Map)['name'] as String];
+      for (final f in files) {
+        final id = (f as Map)['buildId'];
+        if (id is String) entries[id] = {'version': v.version, 'files': names};
+      }
+    }
+    final file = File(p.join(symbolsDir.path, 'index.json'));
+    return file.writeAsString('${const JsonEncoder.withIndent('  ').convert(entries)}\n');
+  }
+
   /// Copies `*.symbols` and `*.map.json` from [from] into
   /// `<symbolsDir>/<version>/` and writes `manifest.json`.
   ///

@@ -17,9 +17,12 @@
 library;
 
 export 'src/archive.dart';
+export 'src/frames.dart';
 export 'src/obfuscation_map.dart';
 export 'src/project.dart';
+export 'src/remote.dart';
 export 'src/resolver.dart';
+export 'src/source_context.dart';
 export 'src/symbols_file.dart';
 export 'src/symbolizer.dart';
 export 'src/trace_info.dart';

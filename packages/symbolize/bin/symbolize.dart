@@ -8,6 +8,7 @@
 //   symbolize list                                   # show archived versions
 //
 // With no subcommand and data on stdin, `symbolize` decodes.
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -15,7 +16,7 @@ import 'package:args/args.dart';
 import 'package:path/path.dart' as p;
 import 'package:symbolize/symbolize.dart';
 
-const _commands = {'decode', 'archive', 'list'};
+const _commands = {'decode', 'archive', 'list', 'watch', 'upload', 'fetch'};
 const _topFlags = {'-h', '--help', '--version'};
 
 void main(List<String> args) async {
@@ -36,6 +37,12 @@ void main(List<String> args) async {
         await _archive(results.command!);
       case 'list':
         _list(results.command!);
+      case 'watch':
+        await _watch(results.command!);
+      case 'upload':
+        await _upload(results.command!);
+      case 'fetch':
+        await _fetch(results.command!);
       case null:
         // No subcommand: decode when stdin is piped, otherwise show help.
         if (stdin.hasTerminal) return _printUsage(parser);
@@ -64,7 +71,19 @@ ArgParser _parser() => ArgParser()
   ..addCommand('archive', _projectOpts(ArgParser())
     ..addOption('from', help: 'split-debug-info dir to archive (default: <project>/build/symbols).')
     ..addOption('version', abbr: 'v', help: 'Version label (default: pubspec.yaml version).'))
-  ..addCommand('list', _projectOpts(ArgParser()));
+  ..addCommand('list', _projectOpts(ArgParser()))
+  ..addCommand('watch', _projectOpts(ArgParser())
+    ..addOption('from', help: 'split-debug-info dir to watch (default: <project>/build/symbols).')
+    ..addOption('version', abbr: 'v', help: 'Version label (default: pubspec.yaml version).'))
+  ..addCommand('upload', _projectOpts(ArgParser())
+    ..addOption('provider', abbr: 'p', help: 'crashlytics | sentry.', mandatory: true)
+    ..addOption('version', abbr: 'v', help: 'Archived version to upload (default: latest archived).')
+    ..addOption('app', help: 'Firebase app id (default: android/app/google-services.json).')
+    ..addOption('map', help: '.map.json to also upload (sentry: requires --debug-id).')
+    ..addOption('debug-id', help: 'Sentry debug-id for --map.'))
+  ..addCommand('fetch', _projectOpts(ArgParser())
+    ..addOption('base', abbr: 'b', help: 'Remote store base URL.', mandatory: true)
+    ..addOption('build-id', help: 'build_id to fetch (default: read it from the trace on stdin).'));
 
 ArgParser _projectOpts(ArgParser p) => p
   ..addOption('project-dir', help: 'Project root (default: nearest pubspec.yaml upwards).')
@@ -79,7 +98,10 @@ ArgParser _decodeOpts() => _projectOpts(ArgParser())
   ..addOption('arch', help: 'Override arch: from the trace header.')
   ..addOption('output', abbr: 'o', help: 'Write the decoded trace here (default: stdout).')
   ..addOption('build-dir', help: 'split-debug-info dir fallback (default: <project>/build/symbols).')
-  ..addFlag('internal-frames', defaultsTo: true, help: 'Keep VM-internal frames in the output.');
+  ..addOption('remote', abbr: 'r', help: 'Remote symbol store URL — fetch a missing build_id automatically.')
+  ..addFlag('internal-frames', defaultsTo: true, help: 'Keep VM-internal frames in the output.')
+  ..addFlag('source', abbr: 's', negatable: false, help: 'Append source lines under decoded frames.')
+  ..addFlag('json', negatable: false, help: 'Emit a machine-readable JSON report.');
 
 void _printUsage(ArgParser parser) {
   stdout
@@ -92,7 +114,10 @@ void _printUsage(ArgParser parser) {
     ..writeln('Commands:')
     ..writeln('  decode   Symbolize an obfuscated stack trace.')
     ..writeln('  archive  Stash build/symbols into symbols/<version>/ for later decoding.')
-    ..writeln('  list     Show archived symbol versions.');
+    ..writeln('  list     Show archived symbol versions.')
+    ..writeln('  watch    Auto-archive whenever build/symbols changes.')
+    ..writeln('  upload   Push an archived version to Crashlytics/Sentry.')
+    ..writeln('  fetch    Download symbols for a build_id from a remote store.');
 }
 
 // ---- decode -----------------------------------------------------------
@@ -114,13 +139,28 @@ Future<void> _decode(ArgResults a) async {
   final buildDir = Directory(_opt(a, 'build-dir') ?? p.join(project.path, 'build', 'symbols'));
 
   String? version = _opt(a, 'version') ?? pubspecVersion(project);
+
+  // Remote store: the trace's build_id isn't archived locally → pull it.
+  final remote = _opt(a, 'remote');
+  final archive = SymbolArchive(symbolsDir);
+  if (remote != null && explicit == null) {
+    final buildId = TraceInfo.parse(trace).buildId;
+    if (buildId != null && (version == null || archive.files(version).isEmpty)) {
+      final fetched = await RemoteSymbolStore(remote).fetch(buildId, archive);
+      if (fetched != null) {
+        stderr.writeln('fetched ${fetched.version} for build_id $buildId');
+        version = fetched.version;
+      }
+    }
+  }
+
   if (explicit == null && version == null) {
     throw StateError('no --version given and no version: in ${p.join(project.path, 'pubspec.yaml')}');
   }
   // UX warning: decode is about to silently use the build/symbols fallback.
   if (explicit == null &&
       version != null &&
-      SymbolArchive(symbolsDir).files(version).isEmpty &&
+      archive.files(version).isEmpty &&
       _symbolFiles(buildDir).isNotEmpty) {
     stderr.writeln('warning: no archive for $version — falling back to ${buildDir.path} (may be a different build)');
   }
@@ -135,6 +175,7 @@ Future<void> _decode(ArgResults a) async {
     os: _opt(a, 'os'),
     arch: _opt(a, 'arch'),
     includeInternalFrames: _flag(a, 'internal-frames', or: true),
+    showSource: _flag(a, 'source'),
   ).catchError((Object e) {
     if (e is StateError && version != null && SymbolArchive(symbolsDir).versions().isNotEmpty) {
       final known = SymbolArchive(symbolsDir).versions().map((v) => v.version).join(', ');
@@ -144,6 +185,17 @@ Future<void> _decode(ArgResults a) async {
   });
 
   final outPath = _opt(a, 'output');
+  if (_flag(a, 'json')) {
+    final encoded = const JsonEncoder.withIndent('  ')
+        .convert({'traces': [for (final r in results) r.toJson()]});
+    if (outPath == null) {
+      stdout.writeln(encoded);
+    } else {
+      File(outPath).writeAsStringSync('$encoded\n');
+      stdout.writeln('written to $outPath');
+    }
+    return;
+  }
   final buffer = StringBuffer();
   var anyUnresolved = false;
   for (var i = 0; i < results.length; i++) {
@@ -205,6 +257,7 @@ Future<void> _archive(ArgResults a) async {
     final file = f as Map;
     stdout.writeln('  ${file['name']}${file['buildId'] != null ? '  buildId ${file['buildId']}' : ''}');
   }
+  await SymbolArchive(symbolsDir).writeIndexFile();
 }
 
 // ---- list -------------------------------------------------------------
@@ -229,6 +282,143 @@ void _list(ArgResults a) {
       stdout.writeln('  ${file['name']}  ${((file['bytes'] as int? ?? 0) / 1024).toStringAsFixed(0)} KiB'
           '${file['buildId'] != null ? '  buildId ${file['buildId']}' : ''}');
     }
+  }
+}
+
+// ---- watch ------------------------------------------------------------
+
+/// Long-running: archives `build/symbols` into `symbols/<version>/` on
+/// startup and again whenever files change (debounced — a build writes
+/// several). Ctrl-C to stop.
+Future<void> _watch(ArgResults a) async {
+  final project = findProjectRoot(_opt(a, 'project-dir') != null ? Directory(_opt(a, 'project-dir')!) : null);
+  final version = _opt(a, 'version') ??
+      pubspecVersion(project) ??
+      (throw StateError('no --version given and no version: in ${p.join(project.path, 'pubspec.yaml')}'));
+  final from = Directory(_opt(a, 'from') ?? p.join(project.path, 'build', 'symbols'))..createSync(recursive: true);
+  final symbolsDir = Directory(_opt(a, 'symbols-dir') ?? p.join(project.path, 'symbols'));
+  final archive = SymbolArchive(symbolsDir);
+
+  Future<void> stash() async {
+    try {
+      final entry = archive.store(version: version, from: from, meta: {'via': 'watch'});
+      stdout.writeln('[watch] archived → symbols/$version (${entry.files.length} files)');
+      await archive.writeIndexFile();
+    } on StateError {
+      // Nothing to archive yet — the build hasn't written symbols.
+    }
+  }
+
+  if (_symbolFiles(from).isNotEmpty) await stash();
+  stdout.writeln('[watch] watching ${from.path} for $version — Ctrl-C to stop');
+
+  Timer? debounce;
+  final sub = from.watch().listen((event) {
+    if (!event.path.endsWith('.symbols') && !event.path.endsWith('.map.json')) return;
+    debounce?.cancel();
+    debounce = Timer(const Duration(seconds: 2), stash);
+  });
+  await ProcessSignal.sigint.watch().first;
+  debounce?.cancel();
+  await sub.cancel();
+  stdout.writeln('[watch] stopped');
+}
+
+// ---- upload -----------------------------------------------------------
+
+/// Pushes an archived version's symbols to a crash-reporting provider.
+/// The local archive stays the source of truth; the provider just gets a
+/// copy so crashes decode server-side too.
+Future<void> _upload(ArgResults a) async {
+  final project = findProjectRoot(_opt(a, 'project-dir') != null ? Directory(_opt(a, 'project-dir')!) : null);
+  final symbolsDir = Directory(_opt(a, 'symbols-dir') ?? p.join(project.path, 'symbols'));
+  final archive = SymbolArchive(symbolsDir);
+
+  final version = _opt(a, 'version') ??
+      archive.versions().lastOrNull?.version ??
+      (throw StateError('no archived versions in ${symbolsDir.path} — run `symbolize archive` first'));
+  final dir = archive.versionDir(version);
+  if (_symbolFiles(dir).isEmpty) {
+    throw StateError('no .symbols files in ${dir.path}');
+  }
+
+  switch (_opt(a, 'provider')) {
+    case 'crashlytics':
+      await _runChecked(
+        await _requireTool('firebase', 'npm i -g firebase-tools'),
+        ['crashlytics:symbols:upload', '--app', _opt(a, 'app') ?? _firebaseAppId(project) ??
+            (throw StateError('no --app given and no google-services.json under ${project.path}')), dir.path],
+      );
+    case 'sentry':
+      final tool = await _requireTool('sentry-cli', 'brew install getsentry/tools/sentry-cli');
+      await _runChecked(tool, ['debug-files', 'upload', dir.path]);
+      final map = _opt(a, 'map');
+      if (map != null) {
+        final debugId = _opt(a, 'debug-id') ??
+            (throw StateError('--debug-id is required when uploading --map'));
+        await _runChecked(tool, ['dart-symbol-map', 'upload', '--debug-id', debugId, map]);
+      }
+    case final other:
+      throw StateError('unknown provider $other — use crashlytics or sentry');
+  }
+}
+
+Future<String> _requireTool(String name, String installHint) async {
+  final found = await _which(name);
+  if (found == null) throw StateError('$name not on PATH — install: $installHint');
+  return found;
+}
+
+Future<String?> _which(String name) async {
+  try {
+    final res = await Process.run(Platform.isWindows ? 'where' : 'which', [name]);
+    return res.exitCode == 0 ? (res.stdout as String).trim().split('\n').first : null;
+  } on ProcessException {
+    return null;
+  }
+}
+
+Future<void> _runChecked(String tool, List<String> args) async {
+  stdout.writeln('> $tool ${args.join(' ')}');
+  final proc = await Process.start(tool, args, mode: ProcessStartMode.inheritStdio);
+  final code = await proc.exitCode;
+  if (code != 0) throw StateError('$tool exited with code $code');
+}
+
+String? _firebaseAppId(Directory project) {
+  for (final rel in ['android/app/google-services.json', 'google-services.json']) {
+    final f = File(p.join(project.path, rel));
+    if (!f.existsSync()) continue;
+    try {
+      final j = jsonDecode(f.readAsStringSync());
+      final client = (j['client'] as List?)?.first as Map?;
+      return ((client?['client_info'] as Map?)?['mobilesdk_app_id']) as String?;
+    } on FormatException {
+      continue;
+    }
+  }
+  return null;
+}
+
+// ---- fetch ------------------------------------------------------------
+
+/// Downloads the symbols for one build_id from a remote store into the
+/// local archive. `--build-id` can be omitted when a trace is on stdin —
+/// it's read from the trace header.
+Future<void> _fetch(ArgResults a) async {
+  var buildId = _opt(a, 'build-id');
+  buildId ??= TraceInfo.parse(await _readTrace(null)).buildId ??
+      (throw StateError('no --build-id given and no build_id in the stdin trace'));
+  final project = findProjectRoot(_opt(a, 'project-dir') != null ? Directory(_opt(a, 'project-dir')!) : null);
+  final symbolsDir = Directory(_opt(a, 'symbols-dir') ?? p.join(project.path, 'symbols'));
+
+  final hit = await RemoteSymbolStore(_opt(a, 'base')!).fetch(buildId, SymbolArchive(symbolsDir));
+  if (hit == null) {
+    throw StateError('build_id $buildId not in ${_opt(a, 'base')}/index.json');
+  }
+  stdout.writeln('fetched → ${hit.dir.path}');
+  for (final f in hit.files) {
+    stdout.writeln('  ${f.name}');
   }
 }
 

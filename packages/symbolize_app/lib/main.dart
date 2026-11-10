@@ -71,6 +71,7 @@ Future<Map<String, Object?>> decodeTraceReport(Map<String, Object?> args) async 
       symbolsDir: Directory(args['symbolsDir'] as String),
       version: args['version'] as String?,
       includeInternalFrames: args['internalFrames'] as bool,
+      showSource: args['showSource'] as bool,
     );
     return {
       'traces': [
@@ -108,6 +109,7 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
   List<ArchivedVersion> _versions = [];
   String? _version;
   bool _internalFrames = true;
+  bool _showSource = false;
   bool _busy = false;
   bool _dragging = false;
   String _status = '';
@@ -151,6 +153,7 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
       _symbolsDir.text = prefs.getString('symbolsDir') ?? _symbolsDir.text;
       _explicitFile.text = prefs.getString('symbolsFile') ?? '';
       _internalFrames = prefs.getBool('internalFrames') ?? _internalFrames;
+      _showSource = prefs.getBool('showSource') ?? _showSource;
       _mode = _SourceMode.values[prefs.getInt('mode') ?? _mode.index];
     });
   }
@@ -160,6 +163,7 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
     await prefs.setString('symbolsDir', _symbolsDir.text);
     await prefs.setString('symbolsFile', _explicitFile.text);
     await prefs.setBool('internalFrames', _internalFrames);
+    await prefs.setBool('showSource', _showSource);
     await prefs.setInt('mode', _mode.index);
   }
 
@@ -249,6 +253,7 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
       'symbolsDir': _symbolsDir.text,
       'version': version,
       'internalFrames': _internalFrames,
+      'showSource': _showSource,
     };
     final report = await SymbolizeApp.decodeRunner(args);
     try {
@@ -436,16 +441,21 @@ class _SymbolizeHomeState extends State<SymbolizeHome> {
               ),
             ),
             const SizedBox(height: 12),
-            Row(children: [
-              FilledButton.icon(
-                onPressed: _busy ? null : _decode,
-                icon: const Icon(Icons.auto_fix_high),
-                label: Text(_busy ? 'Decoding…' : 'Symbolize'),
-              ),
-              const SizedBox(width: 16),
-              Checkbox(value: _internalFrames, onChanged: (v) => setState(() => _internalFrames = v ?? true)),
-              const Text('Include VM-internal frames'),
-            ]),
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                FilledButton.icon(
+                  onPressed: _busy ? null : _decode,
+                  icon: const Icon(Icons.auto_fix_high),
+                  label: Text(_busy ? 'Decoding…' : 'Symbolize'),
+                ),
+                const SizedBox(width: 16),
+                Checkbox(value: _internalFrames, onChanged: (v) => setState(() => _internalFrames = v ?? true)),
+                const Text('Include VM-internal frames'),
+                Checkbox(value: _showSource, onChanged: (v) => setState(() => _showSource = v ?? false)),
+                const Text('Show source'),
+              ],
+            ),
             if (_status.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_status, style: mono.copyWith(fontSize: 11))),
             const SizedBox(height: 8),
             Expanded(

@@ -11,6 +11,17 @@
   discovery next to the `.symbols` file or `-m/--map`.
 - Build-id safety — warns when a symbols file's DWARF build id contradicts
   the trace's `build_id` instead of emitting plausible garbage.
+- `symbolize decode --json` — machine-readable report with structured
+  `DecodedFrame`s (name, uri, line, column) per decoding.
+- `symbolize decode --source` — appends ±2 lines of source under decoded
+  frames when the `file://` path exists locally.
+- `symbolize decode --remote` + `symbolize fetch` — pull symbols for a
+  trace's `build_id` from a shared remote store; `archive`/`watch` write
+  `index.json` so any `symbols/` dir is publishable over HTTP.
+- `symbolize watch` — auto-archives `build/symbols` whenever it changes.
+- `symbolize upload` — pushes an archived version to Crashlytics
+  (`firebase` CLI) or Sentry (`sentry-cli`, incl. `dart-symbol-map`).
+- `.pdb` input produces a clear CodeView-format error.
 - `symbolize archive` — stash `--split-debug-info` output into
   `symbols/<version>/` with a manifest (build ids, git SHA).
 - `symbolize list` — show archived versions and their files.

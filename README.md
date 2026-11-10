@@ -19,6 +19,18 @@ Decoding runs in-process via
 same DWARF engine `flutter symbolize` uses. No Flutter SDK needed at decode
 time.
 
+Beyond the basics:
+
+- **`symbolize watch`** auto-archives `build/symbols` after every build.
+- **`symbolize fetch` / `decode --remote`** pull symbols from a shared
+  remote store — any `symbols/` dir is publishable over HTTP via its
+  auto-written `index.json`.
+- **`symbolize upload`** pushes an archive to Crashlytics or Sentry.
+- **`--json`** and **`--source`** on decode — machine-readable reports and
+  inline source context.
+- **Patch-aware** — each patch/hotfix build has its own `build_id`;
+  archive it under its own version label and matching still works.
+
 ## Repository layout
 
 | Path | What |

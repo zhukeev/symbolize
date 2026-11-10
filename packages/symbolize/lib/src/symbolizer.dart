@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'archive.dart';
+import 'frames.dart';
 import 'obfuscation_map.dart';
 import 'resolver.dart';
+import 'source_context.dart';
 import 'symbols_file.dart';
 import 'trace_info.dart';
 
@@ -39,6 +41,20 @@ class DecodedTrace {
   /// Identifiers restored by the `.map.json` pass — non-zero only for
   /// name-level obfuscated traces (no `--dwarf-stack-traces`).
   final int namesRestored;
+
+  /// Structured frames parsed from [output] — for `--json` and library
+  /// consumers that need machine-readable results.
+  List<DecodedFrame> get frames => parseFrames(output);
+
+  Map<String, Object?> toJson() => {
+        'symbols': symbols.name,
+        'symbolsPath': symbols.path,
+        'resolved': resolved,
+        if (buildIdMatches != null) 'buildIdMatches': buildIdMatches,
+        'namesRestored': namesRestored,
+        'frames': [for (final f in frames) f.toJson()],
+        'output': output,
+      };
 }
 
 /// Result of [symbolize]: the candidates considered plus one [DecodedTrace]
@@ -56,6 +72,11 @@ class SymbolizeResult {
 
   /// Decodings that actually resolved frames — normally the whole list.
   List<DecodedTrace> get resolved => [for (final d in decodings) if (d.resolved) d];
+
+  Map<String, Object?> toJson() => {
+        'warnings': warnings,
+        'decodings': [for (final d in decodings) d.toJson()],
+      };
 }
 
 /// Deobfuscates an AOT [trace] against resolved symbols files.
@@ -77,6 +98,9 @@ class SymbolizeResult {
 /// given), obfuscated identifiers on stack-frame lines are also restored —
 /// covering name-level traces that carry no hex PCs.
 ///
+/// [showSource] appends ±2 lines of source under each frame whose `file://`
+/// path exists locally (see [applySourceContext]).
+///
 /// Throws [StateError] when no candidates are found or a file isn't valid
 /// symbols output.
 Future<SymbolizeResult> symbolize(
@@ -89,6 +113,7 @@ Future<SymbolizeResult> symbolize(
   String? os,
   String? arch,
   bool includeInternalFrames = true,
+  bool showSource = false,
 }) async =>
     _decodeTrace(
       trace,
@@ -97,6 +122,7 @@ Future<SymbolizeResult> symbolize(
       arch: arch,
       obfuscationMap: obfuscationMap,
       includeInternalFrames: includeInternalFrames,
+      showSource: showSource,
     );
 
 /// Like [symbolize] but splits [input] into individual traces first —
@@ -114,6 +140,7 @@ Future<List<SymbolizeResult>> symbolizeAll(
   String? os,
   String? arch,
   bool includeInternalFrames = true,
+  bool showSource = false,
 }) async {
   final pool = _pool(symbols: symbols, symbolsDir: symbolsDir, version: version, buildSymbolsDir: buildSymbolsDir);
   return [
@@ -125,6 +152,7 @@ Future<List<SymbolizeResult>> symbolizeAll(
         arch: arch,
         obfuscationMap: obfuscationMap,
         includeInternalFrames: includeInternalFrames,
+        showSource: showSource,
       ),
   ];
 }
@@ -157,6 +185,7 @@ Future<SymbolizeResult> _decodeTrace(
   required String? arch,
   required ObfuscationMap? obfuscationMap,
   required bool includeInternalFrames,
+  required bool showSource,
 }) async {
   final info = TraceInfo.parse(trace).merge(TraceInfo(os: os, arch: arch));
   final candidates = await selectSymbols(pool, info);
@@ -168,6 +197,7 @@ Future<SymbolizeResult> _decodeTrace(
     final map = obfuscationMap ?? file.obfuscationMap;
     var namesRestored = 0;
     if (map != null) (output, namesRestored) = map.apply(output);
+    if (showSource) output = applySourceContext(output);
     final bool? buildIdMatches = (traceBuildId != null && file.buildId != null)
         ? file.buildId!.toLowerCase() == traceBuildId
         : null;
