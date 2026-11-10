@@ -1,0 +1,7 @@
+.DS_Store
+*.iml
+.idea/
+.vscode/
+
+# Local symbol archives — never commit split-debug-info output.
+symbols/

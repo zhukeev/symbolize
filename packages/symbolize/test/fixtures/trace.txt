@@ -1,0 +1,14 @@
+Unhandled exception:
+Bad state: fixture crash for symbolize tests
+*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+pid: 68570, tid: 8318770816, name Dart_Initialize
+os: macos arch: arm64 comp: no sim: no
+build_id: 'b4485c2ed97b61f597e466d02a0568ce'
+isolate_dso_base: 100fa0000, vm_dso_base: 100fa0000
+isolate_instructions: 100fb0000, vm_instructions: 100fa4000
+    #00 abs 0000000100fe4a27 virt 0000000000044a27 _kDartIsolateSnapshotInstructions+0x34a27
+    #01 abs 0000000100fe49ef virt 00000000000449ef _kDartIsolateSnapshotInstructions+0x349ef
+    #02 abs 0000000100ff07db virt 00000000000507db _kDartIsolateSnapshotInstructions+0x407db
+    #03 abs 0000000100fe4e1f virt 0000000000044e1f _kDartIsolateSnapshotInstructions+0x34e1f
+    #04 abs 0000000100ff0ab7 virt 0000000000050ab7 _kDartIsolateSnapshotInstructions+0x40ab7
+    #05 abs 0000000100fbfcc7 virt 000000000001fcc7 _kDartIsolateSnapshotInstructions+0xfcc7

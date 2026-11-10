@@ -1,0 +1,23 @@
+name: symbolize
+description: >-
+  Deobfuscate Dart and Flutter release stack traces. Archives versioned
+  --split-debug-info symbols per app version and decodes crash traces with
+  them — as a CLI and a Dart library, powered by the same DWARF engine as
+  `flutter symbolize`.
+version: 0.1.0
+repository: https://github.com/zhukeev/symbolize
+
+environment:
+  sdk: ^3.9.0
+
+executables:
+  symbolize:
+
+dependencies:
+  args: ^2.7.0
+  native_stack_traces: ^0.7.1
+  path: ^1.9.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.26.0

@@ -1,0 +1,18 @@
+Unhandled exception:
+Bad state: fixture crash number two
+*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+pid: 69609, tid: 8318770816, name Dart_Initialize
+os: macos arch: arm64 comp: no sim: no
+build_id: 'b4485c2eb346a69097e466d0b6070d2c'
+isolate_dso_base: 100688000, vm_dso_base: 100688000
+isolate_instructions: 100698000, vm_instructions: 10068c000
+    #00 abs 00000001006cca7f virt 0000000000044a7f _kDartIsolateSnapshotInstructions+0x34a7f
+    #01 abs 00000001006cca57 virt 0000000000044a57 _kDartIsolateSnapshotInstructions+0x34a57
+    #02 abs 00000001006cca57 virt 0000000000044a57 _kDartIsolateSnapshotInstructions+0x34a57
+    #03 abs 00000001006cca57 virt 0000000000044a57 _kDartIsolateSnapshotInstructions+0x34a57
+    #04 abs 00000001006cc9f3 virt 00000000000449f3 _kDartIsolateSnapshotInstructions+0x349f3
+    #05 abs 00000001006ccaa3 virt 0000000000044aa3 _kDartIsolateSnapshotInstructions+0x34aa3
+    #06 abs 00000001006d8867 virt 0000000000050867 _kDartIsolateSnapshotInstructions+0x40867
+    #07 abs 00000001006cceab virt 0000000000044eab _kDartIsolateSnapshotInstructions+0x34eab
+    #08 abs 00000001006d8b43 virt 0000000000050b43 _kDartIsolateSnapshotInstructions+0x40b43
+    #09 abs 00000001006a7cc7 virt 000000000001fcc7 _kDartIsolateSnapshotInstructions+0xfcc7
